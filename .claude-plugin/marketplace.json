@@ -1,0 +1,13 @@
+{
+  "name": "ykatkus",
+  "owner": { "name": "ykatkus" },
+  "description": "Claude-Code-Mods von ykatkus.",
+  "plugins": [
+    {
+      "name": "vaults",
+      "source": "./plugins/vaults",
+      "description": "Mehrere Markdown-Vaults: Spoiler-Schutz je Vault, Prüfbefehl nach jeder Änderung, Panel, Backup; /vault.",
+      "version": "0.1.1"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "vaults",
+  "version": "0.1.1",
+  "description": "Mehrere Markdown-Vaults in Claude Code: je Vault eine .claude-vault.json mit Spoiler-Schutz, Prüfbefehl nach jeder Änderung und Panel; /vault verwaltet sie.",
+  "types": "./types/index.d.ts"
+}
