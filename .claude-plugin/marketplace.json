@@ -7,7 +7,7 @@
       "name": "vaults",
       "source": "./plugins/vaults",
       "description": "Mehrere Markdown-Vaults und ein Second Brain: Spoiler-Schutz je Vault, Prüfbefehl, Panel, Backup, Boot-Datei des Brains in jeder Sitzung; /vault.",
-      "version": "0.2.0"
+      "version": "0.2.1"
     }
   ]
 }

@@ -9,7 +9,8 @@ const WORK = `${HOME}/code`
 const files = (): Record<string, string> => ({
   [`${BRAIN}/.claude-vault.json`]: JSON.stringify({ name: 'Brain', boot: 'AGENTS.md', pending: '90-meta/pending.md' }),
   [`${BRAIN}/AGENTS.md`]: '# Boot\nLies zuerst persona.md.\n',
-  [`${BRAIN}/90-meta/pending.md`]: '# Vorschläge\n\n## Offen\n\n- 2026-11-23 · etwas merken\n\n## Erledigt\n\n- alt\n',
+  [`${BRAIN}/90-meta/pending.md`]:
+    '# Vorschläge\n\n## Offen\n\n- 2026-11-23 · etwas merken\n\n- **2026-11-22** — ein langer Eintrag,\n  der weitergeht\n  → proposed home `x.md`\n- [ ] 2026-11-21 mit Kästchen\n\n## Erledigt\n\n- alt\n',
   [`${PRIVATE}/.claude-vault.json`]: JSON.stringify({ name: 'Welt', brain: false }),
 })
 
@@ -77,8 +78,11 @@ test('/vault brain aus leaves it out, /vault brain lists the open proposals', as
   const status = await $.command.run({ command: 'vault', args: 'brain', ...RUN })
   await $.command.run({ command: 'vault', args: 'brain aus', ...RUN })
   const composed = await $.prompt.compose(COMPOSE)
-  expect(status.text).toMatch(/Offene Vorschläge \(90-meta\/pending\.md\): 1/)
+  expect(status.text).toMatch(/Offene Vorschläge \(90-meta\/pending\.md\): 3/)
   expect(status.text).toMatch(/etwas merken/)
+  expect(status.text).toMatch(/• 2026-11-22 — ein langer Eintrag, der weitergeht\n/)
+  expect(status.text).toMatch(/• 2026-11-21 mit Kästchen/)
+  expect(status.text).not.toMatch(/proposed home/)
   expect(status.text).not.toMatch(/alt/)
   expect(composed.sections.map(s => s.text).join('\n')).not.toMatch(/persona\.md/)
 })

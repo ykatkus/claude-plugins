@@ -307,13 +307,26 @@ const backupDue = async ($: EngineInterface) => {
 
 const brains = () => known.filter(v => typeof v.config.boot === 'string' && v.config.boot !== '')
 
-/** The open items of a pending note: each top-level "- " entry under "## Offen" or "## Open", first line only. */
+/**
+ * The open items of a pending note: each top-level "- " entry under "## Offen" or "## Open", with its indented
+ * continuation lines joined into one line, a "[ ]" box and bold marks dropped, and the proposed home after "→" cut.
+ */
 const pendingItems = (text: string): string[] => {
   const open = text.split(/^## (?:Offen|Open)\s*$/m)[1]?.split(/^## /m)[0] ?? ''
-  return open
-    .split('\n')
-    .filter(line => line.startsWith('- '))
-    .map(line => line.slice(2).replace(/\*\*/g, '').trim())
+  const items: string[][] = []
+  for (const line of open.split('\n')) {
+    if (line.startsWith('- ')) items.push([line.slice(2)])
+    else if (/^\s+\S/.test(line) && items.length > 0) items.at(-1)?.push(line.trim())
+  }
+  return items.map(parts =>
+    parts
+      .join(' ')
+      .replace(/^\[[ xX]\]\s*/, '')
+      .replace(/\*\*/g, '')
+      .split(/\s+(?:→|->)\s+(?:proposed home|belongs in|proposed homes?)\b/)[0]!
+      .replace(/\s+/g, ' ')
+      .trim(),
+  )
 }
 const pendingOf = async ($: EngineInterface, vault: Vault) =>
   vault.config.pending ? pendingItems(await $.fs.read(resolve(vault.config.pending, vault.root)).catch(() => '')) : []
