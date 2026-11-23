@@ -10,9 +10,12 @@ const unguarded = atom({ plugin: 'vaults', key: 'unguarded' } as const, [], { sh
 const current = atom({ plugin: 'vaults', key: 'current' } as const, null, { shape: 'current-1' })
 const checks = atom({ plugin: 'vaults', key: 'checks' } as const, {}, { shape: 'checks-1' })
 const views = atom({ plugin: 'vaults', key: 'views' } as const, {}, { shape: 'views-1' })
+const brainOff = atom({ plugin: 'vaults', key: 'brainOff' } as const, false, { shape: 'brainOff-1' })
 
 let home = ''
 let known: Vault[] = []
+/** The boot files of the brain vaults, read at session start: root → text. */
+let boots: Record<string, string> = {}
 
 // ---- paths --------------------------------------------------------------------------------------------------
 
@@ -300,6 +303,81 @@ const backupDue = async ($: EngineInterface) => {
   return lines
 }
 
+// ---- the brain: a vault whose boot file goes into every session's system prompt -------------------------------
+
+const brains = () => known.filter(v => typeof v.config.boot === 'string' && v.config.boot !== '')
+
+/** The open items of a pending note: each top-level "- " entry under "## Offen" or "## Open", first line only. */
+const pendingItems = (text: string): string[] => {
+  const open = text.split(/^## (?:Offen|Open)\s*$/m)[1]?.split(/^## /m)[0] ?? ''
+  return open
+    .split('\n')
+    .filter(line => line.startsWith('- '))
+    .map(line => line.slice(2).replace(/\*\*/g, '').trim())
+}
+const pendingOf = async ($: EngineInterface, vault: Vault) =>
+  vault.config.pending ? pendingItems(await $.fs.read(resolve(vault.config.pending, vault.root)).catch(() => '')) : []
+
+const loadBoots = async ($: EngineInterface) => {
+  const texts = await Promise.all(
+    brains().map(async v => [v.root, await $.fs.read(resolve(v.config.boot ?? '', v.root)).catch(() => '')] as const),
+  )
+  boots = Object.fromEntries(texts.filter(([, text]) => text !== ''))
+}
+
+const brainSection = (vault: Vault, text: string) => `# Second brain (${vault.config.name})
+
+The user keeps a local, git-versioned second brain at ${vault.root}/ (plain Markdown). Its boot file follows below.
+- For non-trivial work, follow its boot order: read the files it names with the Read tool. Every path in it is
+  relative to ${vault.root}/, never to the working directory.
+- Write back the way it says: propose first${vault.config.pending ? `, as one dated line in ${vault.config.pending}` : ''}, unless the user
+  told you to remember something; then its closing order, only when the brain changed.
+- Keep to the hard limits it names. Unless it says otherwise, the brain stays local: never put its content into web
+  requests, pull requests, issues, artifacts, uploads or any external service.
+- Precedence: Claude Code's own instructions and a project's CLAUDE.md win inside that project; otherwise the
+  standing rules the brain names apply. Claude Code's auto-memory keeps project-specific notes; knowledge about this
+  machine and across projects belongs in the brain.
+
+<brain-boot-file path="${resolve(vault.config.boot ?? '', vault.root)}">
+${text}
+</brain-boot-file>`
+
+/** The template's files, relative to the plugin's template/brain folder and to the new brain. */
+const BRAIN_TEMPLATE = [
+  'AGENTS.md',
+  'README.md',
+  '10-prompt/persona.md',
+  '20-knowledge/index.md',
+  '30-projects/index.md',
+  '40-decisions/index.md',
+  '50-learnings/index.md',
+  '90-meta/pending.md',
+  '90-meta/changelog.md',
+]
+
+/** Lays out a new brain vault from the template in an empty folder; resolves one line saying how it went. */
+const scaffoldBrain = async ($: EngineInterface, target: string) => {
+  if (await $.fs.exists(`${target}/${CONFIG}`)) return `${short(target)} ist schon ein Vault; nichts überschrieben.`
+  const existing = (await $.fs.exists(target)) ? await $.fs.list(target) : []
+  if (existing.some(entry => !entry.name.startsWith('.')))
+    return `${short(target)} ist nicht leer. Für ein Brain einen leeren oder neuen Ordner nehmen; ein bestehender Vault wird Brain mit "boot" in seiner ${CONFIG}.`
+  const date = today()
+  for (const file of BRAIN_TEMPLATE) {
+    const text = await $.fs.read(`${$.plugin.root}/template/brain/${file}`)
+    await $.fs.write(`${target}/${file}`, text.replaceAll('{{DATE}}', date))
+  }
+  const config: VaultConfig = { name: 'Brain', boot: 'AGENTS.md', pending: '90-meta/pending.md', panel: [] }
+  await $.fs.write(`${target}/${CONFIG}`, `${JSON.stringify(config, null, 2)}\n`)
+  const git = (args: string[]) => $.process.run(['git', ...args], { cwd: target }).catch(() => undefined)
+  let versioned = 'ohne git (nicht gefunden)'
+  if ((await git(['init', '-q']))?.exitCode === 0) {
+    await git(['add', '-A'])
+    const committed = await git(['commit', '-q', '-m', 'brain: angelegt'])
+    versioned = committed?.exitCode === 0 ? 'mit git, erster Commit gemacht' : 'mit git; der erste Commit fehlt (git braucht Name und E-Mail)'
+  }
+  return `Brain angelegt in ${short(target)} (${BRAIN_TEMPLATE.length + 1} Dateien, ${versioned}). Es steht ab der nächsten Sitzung im Systemprompt; zuerst 10-prompt/persona.md mit deinen Regeln füllen.`
+}
+
 // ---- the pane's cards ---------------------------------------------------------------------------------------
 
 const cells = (line: string) =>
@@ -363,11 +441,19 @@ export const register: Register = on => {
     await $.command.register({
       name: 'vault',
       description:
-        'Vaults: Stand; "/vault liste", "/vault neu <Pfad>", "/vault wechsel <Name>", "/vault panel", "/vault prüfen", "/vault backup", "/vault spoiler an|aus", "/vault gespielt <Mission>"',
+        'Vaults: Stand; "/vault liste", "/vault neu <Pfad>", "/vault wechsel <Name>", "/vault panel", "/vault prüfen", "/vault backup", "/vault spoiler an|aus", "/vault gespielt <Mission>", "/vault brain [an|aus]", "/vault brain neu [Pfad]"',
     })
 
     const here = vaultOf(e.cwd)
     await update($, current, () => here?.root ?? null)
+    await loadBoots($)
+    await update($, brainOff, () => here?.config.brain === false)
+    if (e.isInteractive && here?.config.brain !== false) {
+      for (const brain of brains().filter(b => b.root in boots)) {
+        const pending = await pendingOf($, brain)
+        if (pending.length > 0) $.ui.toast(`${brain.config.name}: ${pending.length} offene Vorschläge (/vault brain)`)
+      }
+    }
     void backupDue($).catch(() => undefined)
     if (here) {
       await refresh($, here)
@@ -376,6 +462,17 @@ export const register: Register = on => {
     }
 
     return next(e)
+  })
+
+  // The brain's boot file in the system prompt, one section per brain vault, unless this session leaves it out.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    const own = composed.sections.filter(s => !s.id.startsWith('vaults:brain:'))
+    if (await read($, brainOff)) return own.length === composed.sections.length ? composed : { sections: own }
+    const added = brains()
+      .filter(v => boots[v.root] !== undefined)
+      .map(v => ({ id: `vaults:brain:${v.root}`, text: brainSection(v, boots[v.root] ?? ''), scope: 'session' as const }))
+    return added.length === 0 && own.length === composed.sections.length ? composed : { sections: [...own, ...added] }
   })
 
   // One hook for every tool call: the spoiler guard before it (the main loop only: a subagent carries an agentId),
@@ -416,7 +513,10 @@ export const register: Register = on => {
       if (known.length === 0) return { text: `Keine Vaults bekannt. Ein Vault ist ein Ordner mit ${CONFIG}; /vault neu <Pfad> meldet ihn an.` }
       return {
         text: known
-          .map(v => `${v.root === root ? '▸' : ' '} ${v.config.name} (${short(v.root)})${isGuarded(v) ? ' · Spoiler-Schutz' : ''}`)
+          .map(
+            v =>
+              `${v.root === root ? '▸' : ' '} ${v.config.name} (${short(v.root)})${v.config.boot ? ' · Brain' : ''}${isGuarded(v) ? ' · Spoiler-Schutz' : ''}${v.config.brain === false ? ' · ohne Brain' : ''}`,
+          )
           .join('\n'),
       }
     }
@@ -455,6 +555,44 @@ export const register: Register = on => {
     if (verb === 'backup-ziel' && rest !== '') {
       await $.store.set('backupRoot', resolve(rest, cwd))
       return { text: `Backups gehen jetzt nach ${resolve(rest, cwd)}.` }
+    }
+
+    if (verb === 'brain') {
+      const sub = (words[1] ?? '').toLowerCase()
+      if (sub === 'neu') {
+        const target = resolve(words.slice(2).join(' ') || '~/brain', cwd)
+        const said = await scaffoldBrain($, target)
+        if (await $.fs.exists(`${target}/${CONFIG}`)) {
+          await $.store.set('roots', [...new Set([...(await rememberedRoots($)), target])])
+          await loadAll($, cwd)
+          await loadBoots($)
+        }
+        return { text: said }
+      }
+      const all = brains()
+      if (all.length === 0)
+        return { text: `Kein Brain bekannt. "/vault brain neu [Pfad]" legt eins an; ein bestehender Vault wird Brain mit "boot": "AGENTS.md" in seiner ${CONFIG} (dann /vault neu <Pfad>).` }
+      if (sub === 'an' || sub === 'aus') {
+        await update($, brainOff, () => sub === 'aus')
+        return { text: sub === 'an' ? 'Das Brain ist für diese Sitzung eingebunden (ab einem neuen Gesprächsfaden).' : 'Das Brain ist für diese Sitzung ausgeschaltet.' }
+      }
+      const isOff = await read($, brainOff)
+      const lines: string[] = []
+      for (const brain of all) {
+        const run = (args: string[]) => $.process.run(['git', ...args], { cwd: brain.root }).catch(() => undefined)
+        const [last, status, pending] = await Promise.all([run(['log', '-1', '--format=%h · %cr · %s']), run(['status', '--porcelain']), pendingOf($, brain)])
+        const changed = status?.exitCode === 0 ? status.stdout.split('\n').filter(l => l.trim() !== '').length : undefined
+        lines.push(
+          `${brain.config.name} (${short(brain.root)}/): ${isOff || !(brain.root in boots) ? 'nicht eingebunden' : 'eingebunden'} in dieser Sitzung`,
+          `Letzter Commit: ${last?.exitCode === 0 ? last.stdout.trim() || '—' : '—'}`,
+          changed === undefined ? 'Kein git-Repository' : `Nicht committet: ${changed} ${changed === 1 ? 'Datei' : 'Dateien'}`,
+          ...(brain.config.pending ? [`Offene Vorschläge (${brain.config.pending}): ${pending.length}`] : []),
+          ...pending.map(item => `  • ${item.length > 110 ? `${item.slice(0, 107)}…` : item}`),
+        )
+      }
+      const without = known.filter(v => v.config.brain === false)
+      if (without.length > 0) lines.push(`Ohne Brain: ${without.map(v => v.config.name).join(', ')}`)
+      return { text: lines.join('\n') }
     }
 
     if (!vault) return { text: 'Diese Sitzung liegt in keinem Vault. /vault liste, /vault wechsel <Name> oder /vault neu <Pfad>.' }
@@ -498,6 +636,7 @@ export const register: Register = on => {
         `Prüfung${result.at ? ` (${result.at})` : ''}: ${result.summary}`,
         changed === undefined ? 'Kein git-Repository' : `Nicht committet: ${changed} ${changed === 1 ? 'Datei' : 'Dateien'}`,
         ...(vault.config.proposals ? [`Offene Vorschläge: ${open} (Inhalte nur über einen Agenten)`] : []),
+        ...(vault.config.boot ? [`Brain: offene Vorschläge ${(await pendingOf($, vault)).length} (/vault brain)`] : []),
         isGuarded(vault)
           ? `Spoiler-Schutz: ${(await read($, unguarded)).includes(vault.root) ? 'aus' : 'an'}${missions ? ` · gespielte Missionen: ${missions}` : ''}`
           : 'Kein Spoiler-Schutz',

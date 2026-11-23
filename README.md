@@ -13,8 +13,28 @@ Mehrere Markdown-Vaults (z. B. Obsidian) in Claude Code. Jeder Vault beschreibt 
 - **Panel** mit Karten aus Notizen des Vaults, **Backup** (Spiegel und git-Bundle) in einen Ordner nach Wahl
   (`/vault backup-ziel <Pfad>`).
 
+- **Second Brain:** ein Vault mit `"boot": "AGENTS.md"` ist ein Brain. Seine Boot-Datei steht im Systemprompt
+  jeder Sitzung, in welchem Ordner sie auch startet; seine offenen Vorschläge (`"pending"`) zeigt `/vault brain`.
+  Ein Vault mit `"brain": false` bekommt es nicht.
+
 `/vault` zeigt den Stand; `/vault liste`, `neu <Pfad>`, `wechsel <Name>`, `panel`, `prüfen`, `backup`,
-`spoiler an|aus`, `gespielt <Mission>`.
+`spoiler an|aus`, `gespielt <Mission>`, `brain [an|aus]`.
+
+### Ein Brain anlegen
+
+```
+/vault brain neu ~/brain
+```
+
+legt in einem leeren Ordner ein Brain mit Startgerüst an (Regeln für den Assistenten, Wissen, Projekte,
+Entscheidungen, offene Vorschläge), mit git. Danach `10-prompt/persona.md` mit den eigenen Regeln füllen und eine
+neue Sitzung starten. Das Brain bleibt lokal; das Plugin lädt nichts hoch.
+
+Ein bestehender Ordner wird Brain mit einer `.claude-vault.json` wie dieser, dann `/vault neu <Pfad>`:
+
+```json
+{ "name": "Brain", "boot": "AGENTS.md", "pending": "90-meta/pending.md" }
+```
 
 ## Installieren
 

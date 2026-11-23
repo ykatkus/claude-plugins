@@ -40,6 +40,15 @@ export type VaultConfig = {
   /** A folder of proposals: the status counts only, never the content. */
   proposals?: string
   panel?: PanelCard[]
+  /**
+   * The vault is a second brain: this note (its boot file, e.g. "AGENTS.md") goes into the system prompt of every
+   * session, in whatever folder it starts, except in a vault that says `brain: false`.
+   */
+  boot?: string
+  /** The brain's open proposals: a note whose "## Offen" (or "## Open") list /vault brain and the start show. */
+  pending?: string
+  /** false: sessions in this vault get no brain (a vault whose own rules forbid instructions from outside it). */
+  brain?: boolean
 }
 
 /** A vault the plugin knows: its root and its config. */
@@ -60,6 +69,8 @@ declare module 'claude-code' {
       current: Shaped<string | null>
       checks: Shaped<Record<string, VaultCheck>>
       views: Shaped<Record<string, CardView[]>>
+      /** Whether the brain is left out of this session (/vault brain aus, or a vault with brain: false). */
+      brainOff: Shaped<boolean>
     }
   }
 }
