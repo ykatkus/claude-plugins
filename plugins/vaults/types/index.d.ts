@@ -36,6 +36,8 @@ export type VaultConfig = {
     open?: string[]
     /** An MCP tool whose full reads are refused, and the lists that may be read. */
     studio?: { tool: string; safeLists: string[] }
+    /** More skills (short names) that make the session the game master, beside pnp-spielleiter and pnp-kampagne. */
+    gameMasterSkills?: string[]
   }
   /** A folder of proposals: the status counts only, never the content. */
   proposals?: string
@@ -71,6 +73,10 @@ declare module 'claude-code' {
       views: Shaped<Record<string, CardView[]>>
       /** Whether the brain is left out of this session (/vault brain aus, or a vault with brain: false). */
       brainOff: Shaped<boolean>
+      /** Game-master mode: a game-master skill loaded; the guard covers results in the transcript instead of refusing. */
+      gameMaster: Shaped<boolean>
+      /** The tool_use_ids whose results the transcript covers. */
+      covered: Shaped<string[]>
     }
   }
 }

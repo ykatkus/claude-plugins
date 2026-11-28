@@ -11,6 +11,16 @@ const current = atom({ plugin: 'vaults', key: 'current' } as const, null, { shap
 const checks = atom({ plugin: 'vaults', key: 'checks' } as const, {}, { shape: 'checks-1' })
 const views = atom({ plugin: 'vaults', key: 'views' } as const, {}, { shape: 'views-1' })
 const brainOff = atom({ plugin: 'vaults', key: 'brainOff' } as const, false, { shape: 'brainOff-1' })
+/** The session leads or builds a game (a game-master skill loaded): the guard covers results instead of refusing. */
+const gameMaster = atom({ plugin: 'vaults', key: 'gameMaster' } as const, false, { shape: 'gameMaster-1' })
+/** The tool calls whose result the transcript does not show (game-master mode), by tool_use_id. */
+const covered = atom({ plugin: 'vaults', key: 'covered' } as const, [], { shape: 'covered-1' })
+
+/** Skills that make the session the game master or the builder of a campaign (D&D Studio's), by their short name. */
+const GAME_MASTER_SKILLS = ['pnp-spielleiter', 'pnp-kampagne']
+const COVER_NOTE =
+  'vaults: Spielleiter-Modus. Dieses Ergebnis ist Spielleiterwissen und dem Menschen im Terminal verdeckt (er spielt mit). ' +
+  'Nutze es für die Spielleitung, aber zitiere oder fasse es in deiner Antwort an ihn nicht zusammen: an ihn nur, was die Spieler sehen dürfen, oder Zahlen.'
 
 let home = ''
 let known: Vault[] = []
@@ -119,6 +129,27 @@ const deny = (what: string, why: string, vault?: Vault) => {
   }
 }
 
+/**
+ * The vaults whose Studio guard holds in this session: the session's own vault only (its switch alone turns it off). A
+ * session in a vault without a Studio guard plays its own campaign: no other vault's Studio guard applies there
+ * (Schmiede des Charakters, 2026-11-25: Korath's guard blocked its game master). Only a session in no vault keeps
+ * every guard.
+ */
+const studioGuards = async ($: EngineInterface) => {
+  const off = await read($, unguarded)
+  const sessionRoot = await read($, current)
+  const session = known.find(v => v.root === sessionRoot)
+  const owners = session ? (session.config.guard?.studio ? [session] : []) : known
+  return owners.filter(v => v.config.guard?.studio !== undefined && !off.includes(v.root))
+}
+
+/** The MCP server prefix of a Studio tool (`mcp__plugin_dnd-studio_dnd-studio__campaign` → `…dnd-studio__`). */
+const serverOf = (tool: string) => (tool.startsWith('mcp__') ? tool.slice(0, tool.lastIndexOf('__') + 2) : tool)
+
+/** In game-master mode: whether this call is one of a guarded Studio's tools, whose result the human may not see. */
+const isStudioCall = async ($: EngineInterface, tool: string) =>
+  (await studioGuards($)).some(v => serverOf(v.config.guard?.studio?.tool ?? '') === serverOf(tool) && tool.startsWith('mcp__'))
+
 const READ_VERBS = /\b(cat|head|tail|less|more|sed|awk|grep|rg|ag|bat|strings|diff|cut|sort|uniq|python3?|node|jq|xxd|od|find|ls|tree|git\s+(show|diff|log|grep|blame))\b/
 
 /** The guard's answer for one call of the main loop: a denial, or undefined to let it run. */
@@ -183,12 +214,8 @@ const spoilerDenial = async ($: EngineInterface, e: ToolCallInput, cwd: string) 
     }
   }
 
-  // The Studio campaign is guarded by the session's own vault only (its switch alone turns it off); a session in no
-  // vault, or in one without a Studio guard, keeps every vault's Studio guard.
-  const sessionRoot = await read($, current)
-  const session = known.find(v => v.root === sessionRoot)
-  const studioOwners = session?.config.guard?.studio ? [session] : known
-  for (const vault of studioOwners.filter(v => v.config.guard?.studio?.tool === e.tool && !off.includes(v.root))) {
+  // The Studio campaign: see studioGuards.
+  for (const vault of (await studioGuards($)).filter(v => v.config.guard?.studio?.tool === e.tool)) {
     const safe = new Set(vault.config.guard?.studio?.safeLists ?? [])
     const isGet = args['action'] === undefined || args['action'] === 'get'
     const lists = Array.isArray(args['only']) ? (args['only'] as string[]) : []
@@ -454,7 +481,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'vault',
       description:
-        'Vaults: Stand; "/vault liste", "/vault neu <Pfad>", "/vault wechsel <Name>", "/vault panel", "/vault prüfen", "/vault backup", "/vault spoiler an|aus", "/vault gespielt <Mission>", "/vault brain [an|aus]", "/vault brain neu [Pfad]"',
+        'Vaults: Stand; "/vault liste", "/vault neu <Pfad>", "/vault wechsel <Name>", "/vault panel", "/vault prüfen", "/vault backup", "/vault spoiler an|aus", "/vault spielleitung an|aus", "/vault gespielt <Mission>", "/vault brain [an|aus]", "/vault brain neu [Pfad]"',
     })
 
     const here = vaultOf(e.cwd)
@@ -493,12 +520,21 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     if (known.length === 0) return next(e)
     const cwd = await $.session.cwd()
+    let isCovered = false
     if (e.agentId === undefined) {
       const denial = await spoilerDenial($, e, cwd)
-      if (denial) return denial
+      // The game master (a game-master skill loaded) must read everything to lead and build: the call runs, and the
+      // transcript covers its result, so the human who plays still sees nothing.
+      if (await read($, gameMaster)) isCovered = denial !== undefined || (await isStudioCall($, e.tool))
+      else if (denial) return denial
+    }
+    if (isCovered && e.tool_use_id) {
+      const id = e.tool_use_id
+      await update($, covered, list => [...list.slice(-499), id])
     }
 
-    const ran = await next(e)
+    const ran0 = await next(e)
+    const ran = isCovered && ran0.deny === undefined ? { ...ran0, context: [...(ran0.context ?? []), COVER_NOTE] } : ran0
     if (ran.deny !== undefined || ran.isError === true) return ran
     const path = changedPath(e, cwd)
     const vault = path ? vaultOf(path) : undefined
@@ -513,6 +549,30 @@ export const register: Register = on => {
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: 'vaults: der Spoiler-Schutz ist hier fehlgeschlagen; lass einen Agenten damit arbeiten.' },
   )
+
+  // A game-master skill loaded (typed as /name, by the Skill tool or preloaded): the session leads or builds a game.
+  on('skill.prompt', async ($, e, next) => {
+    const name = e.skill.split(':').at(-1) ?? e.skill
+    const skills = known.flatMap(v => v.config.guard?.gameMasterSkills ?? [])
+    if ([...GAME_MASTER_SKILLS, ...skills].includes(name) && known.some(isGuarded)) {
+      if (!(await read($, gameMaster))) $.ui.toast('Spielleiter-Modus: Spielleiterwissen läuft, Ergebnisse sind verdeckt')
+      await update($, gameMaster, () => true)
+    }
+    return next(e)
+  })
+
+  // A covered call: its row and its result draw without the result, in every view (ctrl+o too).
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (!(await read($, covered)).includes(e.props.tool_use_id)) return next(e)
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>  ⎿  verdeckt (Spoiler-Schutz, Spielleiter-Modus)</Text>
+  })
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (!(await read($, covered)).includes(e.props.tool_use_id)) return next(e)
+    const { Text } = $.ui.resolve(e)
+    const name = e.props.tool.startsWith('mcp__') ? e.props.tool.slice(e.props.tool.lastIndexOf('__') + 2) : e.props.tool
+    return <Text dimColor>● {name} · {e.props.isRunning ? 'läuft' : 'Ergebnis verdeckt'} (Spoiler-Schutz)</Text>
+  })
 
   on('command.run', { command: 'vault' }, async ($, e) => {
     const words = e.args.trim().split(/\s+/).filter(w => w !== '')
@@ -608,6 +668,16 @@ export const register: Register = on => {
       return { text: lines.join('\n') }
     }
 
+    if (verb === 'spielleitung' && (rest === 'an' || rest === 'aus')) {
+      await update($, gameMaster, () => rest === 'an')
+      return {
+        text:
+          rest === 'an'
+            ? 'Spielleiter-Modus an: Spielleiterwissen ist lesbar, seine Ergebnisse sind im Terminal verdeckt.'
+            : 'Spielleiter-Modus aus: Spielleiterwissen wird in der Hauptsitzung wieder abgelehnt.',
+      }
+    }
+
     if (!vault) return { text: 'Diese Sitzung liegt in keinem Vault. /vault liste, /vault wechsel <Name> oder /vault neu <Pfad>.' }
 
     if (verb === 'panel') {
@@ -651,7 +721,8 @@ export const register: Register = on => {
         ...(vault.config.proposals ? [`Offene Vorschläge: ${open} (Inhalte nur über einen Agenten)`] : []),
         ...(vault.config.boot ? [`Brain: offene Vorschläge ${(await pendingOf($, vault)).length} (/vault brain)`] : []),
         isGuarded(vault)
-          ? `Spoiler-Schutz: ${(await read($, unguarded)).includes(vault.root) ? 'aus' : 'an'}${missions ? ` · gespielte Missionen: ${missions}` : ''}`
+          ? `Spoiler-Schutz: ${(await read($, unguarded)).includes(vault.root) ? 'aus' : 'an'}${missions ? ` · gespielte Missionen: ${missions}` : ''}` +
+            ` · Spielleiter-Modus: ${(await read($, gameMaster)) ? 'an (Ergebnisse verdeckt)' : 'aus'}`
           : 'Kein Spoiler-Schutz',
         `Letztes Backup: ${String((await $.store.get(`backup:${vault.root}`)) ?? 'noch keins')} (${short(await backupRoot($))})`,
         ...(known.length > 1 ? [`Weitere Vaults: ${known.filter(v => v !== vault).map(v => v.config.name).join(', ')}`] : []),

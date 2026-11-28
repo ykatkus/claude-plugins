@@ -9,6 +9,9 @@ Mehrere Markdown-Vaults (z. B. Obsidian) in Claude Code. Jeder Vault beschreibt 
 
 - **Spoiler-Schutz je Vault:** geschützte Ordner liest nur ein Agent, nie die Hauptsitzung; `/vault spoiler aus`
   löst ihn für diese Sitzung und nur für diesen Vault.
+- **Spielleiter-Modus:** lädt die Sitzung `pnp-spielleiter` oder `pnp-kampagne` (D&D Studio), liest die Hauptsitzung
+  Spielleiterwissen, aber das Terminal verdeckt die Ergebnisse (auch mit ctrl+o): Wer mitspielt, sieht nichts.
+  `/vault spielleitung an|aus` schaltet ihn von Hand; weitere Skills nennt `guard.gameMasterSkills`.
 - **Prüfbefehl:** läuft nach jeder Änderung im Vault (z. B. ein Validierungsskript).
 - **Panel** mit Karten aus Notizen des Vaults, **Backup** (Spiegel und git-Bundle) in einen Ordner nach Wahl
   (`/vault backup-ziel <Pfad>`).
@@ -18,7 +21,7 @@ Mehrere Markdown-Vaults (z. B. Obsidian) in Claude Code. Jeder Vault beschreibt 
   Ein Vault mit `"brain": false` bekommt es nicht.
 
 `/vault` zeigt den Stand; `/vault liste`, `neu <Pfad>`, `wechsel <Name>`, `panel`, `prüfen`, `backup`,
-`spoiler an|aus`, `gespielt <Mission>`, `brain [an|aus]`.
+`spoiler an|aus`, `spielleitung an|aus`, `gespielt <Mission>`, `brain [an|aus]`.
 
 ### Ein Brain anlegen
 

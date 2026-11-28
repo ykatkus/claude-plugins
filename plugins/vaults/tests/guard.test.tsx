@@ -213,3 +213,64 @@ test('the guard holds for a guarded vault from a session in another vault', asyn
   expect('deny' in ran && ran.deny).toMatch(/Alpha/)
   expect('deny' in own ? own.deny : undefined).toBeUndefined()
 })
+
+test("a session in a vault without a Studio guard is not blocked by another vault's Studio guard", async ($, on) => {
+  both(on, OTHER)
+  await start($, OTHER)
+  await $.command.run({ command: 'vault', args: `neu ${BETA}`, ...RUN })
+  const studio = await $.tool.call(STUDIO_GET)
+  const beta = await $.tool.call({ tool: 'Read', file_path: `${BETA}/90-spielleitung/x.md` })
+  expect('deny' in studio ? studio.deny : undefined).toBeUndefined()
+  expect('deny' in beta && beta.deny).toMatch(/Beta/)
+})
+
+// Game-master mode: the game master and the campaign builder must read everything; the human who plays sees nothing.
+const GM_SKILL = { skill: 'dnd-studio:pnp-spielleiter', text: 'Leite den Abend.', source: 'plugin', pluginName: 'dnd-studio' } as const
+
+test('without a game-master skill the full Studio read stays refused', async ($, on) => {
+  engine(on)
+  await start($)
+  const ran = await $.tool.call({ ...STUDIO_GET, tool_use_id: 't0' })
+  expect('deny' in ran && ran.deny).toMatch(/Alpha/)
+})
+
+test('the game master reads the full Studio campaign and GM notes, with the result covered', async ($, on) => {
+  engine(on)
+  on('skill.prompt', (_, e) => ({ text: e.text }))
+  await start($)
+  await $.skill.prompt(GM_SKILL)
+  const studio = await $.tool.call({ ...STUDIO_GET, tool_use_id: 't1' })
+  const note = await $.tool.call({ tool: 'Read', file_path: `${VAULT}/90-gm/secrets.md`, tool_use_id: 't2' })
+  expect('deny' in studio ? studio.deny : undefined).toBeUndefined()
+  expect('deny' in note ? note.deny : undefined).toBeUndefined()
+  expect(('context' in studio && studio.context?.join('\n')) || '').toMatch(/verdeckt/)
+
+  const row = await $.ui.mount({
+    plugin: 'vaults',
+    surface: 'terminal',
+    component: 'ToolResult',
+    props: { tool_use_id: 't1', tool: STUDIO_GET.tool, output: { secret: 'x' }, isErrored: false },
+  })
+  expect(await row.find({ text: /verdeckt/ })).toBeDefined()
+  expect(await row.keepsBeneath()).toBe(false)
+  await row.unmount()
+
+  const open = await $.ui.mount({
+    plugin: 'vaults',
+    surface: 'terminal',
+    component: 'ToolResult',
+    props: { tool_use_id: 'other', tool: 'Bash', output: { stdout: 'ok', stderr: '', interrupted: false }, isErrored: false },
+  })
+  expect(await open.keepsBeneath()).toBe(true)
+  await open.unmount()
+})
+
+test('/vault spielleitung aus ends game-master mode', async ($, on) => {
+  engine(on)
+  on('skill.prompt', (_, e) => ({ text: e.text }))
+  await start($)
+  await $.skill.prompt({ ...GM_SKILL, skill: 'pnp-kampagne' })
+  await $.command.run({ command: 'vault', args: 'spielleitung aus', ...RUN })
+  const ran = await $.tool.call({ ...STUDIO_GET, tool_use_id: 't3' })
+  expect('deny' in ran && ran.deny).toMatch(/Alpha/)
+})
